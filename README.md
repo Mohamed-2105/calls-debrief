@@ -16,9 +16,38 @@ The analysis is written in French; questions, answers and the role description s
 
 ```
 01_A_Traiter/           1. Transcription        2. Analysis           3. Export           4. Archive
-  .m4a .mp3 .wav   ──▶  mlx-whisper (local) ──▶  Gemini (structured ──▶ Notion page   ──▶  02_Archives/
-  .txt .vtt .srt        or read + clean text      JSON output)          in a database
+  .m4a .mp3 .wav   ──▶  mlx-whisper         ──▶  Gemini (structured ──▶ Notion page   ──▶  02_Archives/
+  .txt .vtt .srt        + pyannote (local)        JSON output)          in a database
+                        or read + clean text
+                               │
+                               └──▶ 03_Transcripts/ (transcript as sent to Gemini)
 ```
+
+### Transcription and speaker detection
+
+Audio files go through two local models, both on the Apple GPU:
+
+1. **mlx-whisper** turns speech into text, cut into segments of a few seconds with start and end times. It doesn't know who is speaking.
+2. **pyannote** (`speaker-diarization-community-1`) doesn't transcribe anything: it finds *who speaks when*, as speaker turns (`SPEAKER_00` from 12.3 s to 18.9 s, …). Its "exclusive" output is used, where only one person speaks at a time, so it lines up with Whisper's segments.
+
+The two are then merged in `fusionner()` (`calls_debrief/etapes/transcription.py`):
+
+- Each Whisper segment goes to the speaker whose turns overlap it the most.
+- A segment that no turn overlaps at all is dropped. pyannote's turns double as voice activity detection (VAD): if it heard no voice there, the text is something Whisper made up over silence (typically the same phrase repeated at the start of a recording).
+- Consecutive segments from the same speaker are joined into one line.
+
+The result looks like this, and is what Gemini receives:
+
+```
+SPEAKER_01 : Yeah, of course. You already talked to Sarah, right?
+SPEAKER_00 : Yeah, exactly.
+SPEAKER_01 : So maybe we just dive in. […] what are you looking for?
+SPEAKER_00 : Super clear. So I'm actually a student in a data science master's program, […]
+```
+
+pyannote doesn't know names, only that there are distinct voices. The prompt tells Gemini that these labels come from automatic detection and that it must work out from context which one is the candidate (`CANDIDATE_NAME`).
+
+Diarization is optional: without `HF_TOKEN`, or if pyannote fails (model access, network…), the pipeline falls back to Whisper's plain text and Gemini infers speakers from content alone.
 
 ```
 calls-debrief/
@@ -28,9 +57,9 @@ calls-debrief/
     ├── schemas.py             # Pydantic schema of the debrief (Gemini's response schema)
     ├── etat.py                # local state in .etat/: transcript cache, files already sent
     ├── etapes/                # pipeline steps
-    │   ├── transcription.py   # mlx-whisper; .vtt/.srt cleanup
+    │   ├── transcription.py   # mlx-whisper + pyannote and their merge; .vtt/.srt cleanup
     │   ├── analyse.py         # Gemini prompt and retry logic
-    │   └── archivage.py       # move to 02_Archives without overwriting
+    │   └── archivage.py       # move to 02_Archives, save transcripts to 03_Transcripts, without overwriting
     └── notion/                # Notion export
         ├── cible.py           # detects database vs page, maps the debrief onto existing columns
         ├── blocs.py           # page content (respects the 2000-character limit)
@@ -52,7 +81,7 @@ calls-debrief/
 - A [Notion integration](https://www.notion.so/my-integrations) with access to the target database or page
 - Google Drive for desktop (or any local folder; see `CALLS_FOLDER`)
 
-ffmpeg is provided by `static-ffmpeg`, which downloads its binaries on first use. The Whisper model (`whisper-large-v3-turbo`, about 1.6 GB) is downloaded on the first transcription.
+ffmpeg is provided by `static-ffmpeg`, which downloads its binaries on first use. The Whisper model (`whisper-large-v3-turbo`, about 1.6 GB) is downloaded on the first transcription. The pyannote model is downloaded on first use too (requires `HF_TOKEN`).
 
 ## Setup
 
@@ -109,7 +138,7 @@ Set `CALLS_FOLDER` in `.env` to your own folder. The pipeline reads from `CALLS_
 
 Every supported file in `01_A_Traiter` is processed. To skip a file, move it out of that folder.
 
-A 30-minute recording takes about 8 minutes on an M1 (mostly transcription), plus under a minute for Gemini and Notion.
+A 30-minute recording takes about 16 minutes on an M1: about 8 for Whisper and 8 for pyannote, plus under a minute for Gemini and Notion. Without `HF_TOKEN`, about 8 minutes.
 
 ## Configuration
 
@@ -123,5 +152,7 @@ The prompt (`PROMPT_DEBRIEF` in `calls_debrief/etapes/analyse.py`) and the field
 
 ## Limitations
 
-- Speakers are detected by pyannote (`SPEAKER_00`, `SPEAKER_01`…): each Whisper segment goes to the speaker whose turns overlap it most. Gemini still works out from context which label is the candidate. A segment where the speaker changes mid-sentence goes entirely to one speaker. Without `HF_TOKEN`, Gemini infers speakers from the plain text alone.
+- A Whisper segment where the speaker changes mid-sentence goes entirely to one speaker, and when both people talk at once their words can end up in the same line.
+- Short interjections ("yeah", "ok") said while the other person is talking are absorbed into that person's line.
+- Overlapping speech, background noise or a third voice can make pyannote detect an extra speaker.
 - In `.vtt`/`.srt` files, a line containing only digits is treated as a cue number and removed.

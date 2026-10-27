@@ -51,11 +51,11 @@ def fusionner(segments: list, tours: list) -> str:
             r = min(seg["end"], fin) - max(seg["start"], debut)
             if r > 0:
                 recouvrements[loc] = recouvrements.get(loc, 0) + r
-        # Sans recouvrement (silence mal découpé), on garde le locuteur précédent
-        loc = max(recouvrements, key=recouvrements.get) if recouvrements else precedent or "INCONNU"
         texte = seg["text"].strip()
-        if not texte:
+        # Aucune voix détectée par pyannote sur ce segment : texte inventé par Whisper sur un silence
+        if not recouvrements or not texte:
             continue
+        loc = max(recouvrements, key=recouvrements.get)
         if loc == precedent:
             lignes[-1] += " " + texte
         else:
