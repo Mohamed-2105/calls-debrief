@@ -1,0 +1,82 @@
+"""Construit et installe l'app de la barre des menus dans ~/Applications/Calls Debrief.app."""
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+from calls_debrief import progression
+from calls_debrief.config import (DOSSIER_A_TRAITER, DOSSIER_ARCHIVES, DOSSIER_CORBEILLE, DOSSIER_PROJET,
+                                  DOSSIER_TRANSCRIPTS, DUREE_CORBEILLE_JOURS)
+from calls_debrief.enregistrement import DOSSIER_BRUTS, DOSSIER_OUTILS, compiler
+from calls_debrief.etat import DOSSIER_CACHE_TRANSCRIPTS, DOSSIER_ETAT
+
+NOM_APP = "Calls Debrief"
+EXECUTABLE = "CallsDebrief"
+IDENTIFIANT = "local.calls-debrief.app"
+APP = os.path.expanduser(f"~/Applications/{NOM_APP}.app")
+
+def creer_icone(destination: str):
+    """Dessine l'icône (outils/icone) et la convertit en .icns."""
+    binaire = os.path.join(DOSSIER_ETAT, "bin", "icone")
+    compiler([os.path.join(DOSSIER_OUTILS, "icone", "main.swift")], binaire)
+    with tempfile.TemporaryDirectory() as dossier:
+        iconset = os.path.join(dossier, "AppIcon.iconset")
+        subprocess.run([binaire, iconset], check=True)
+        subprocess.run(["iconutil", "-c", "icns", iconset, "-o", destination], check=True)
+
+def installer():
+    python = os.path.join(DOSSIER_PROJET, ".venv", "bin", "python3")
+    if not os.path.exists(python):
+        python = sys.executable
+
+    subprocess.run(["pkill", "-x", EXECUTABLE], check=False)  # remplace une version déjà lancée
+    if os.path.exists(APP):
+        shutil.rmtree(APP)
+    contenu = os.path.join(APP, "Contents")
+    os.makedirs(os.path.join(contenu, "MacOS"))
+    os.makedirs(os.path.join(contenu, "Resources"))
+
+    print("Compilation de l'app...")
+    dossier_app = os.path.join(DOSSIER_OUTILS, "app")
+    sources_app = sorted(os.path.join(dossier_app, f) for f in os.listdir(dossier_app) if f.endswith(".swift"))
+    compiler([os.path.join(DOSSIER_OUTILS, "commun", "Capture.swift"), *sources_app],
+             os.path.join(contenu, "MacOS", EXECUTABLE))
+
+    creer_icone(os.path.join(contenu, "Resources", "AppIcon.icns"))
+
+    with open(os.path.join(contenu, "Info.plist"), "wb") as f:
+        plistlib.dump({
+            "CFBundleIdentifier": IDENTIFIANT,
+            "CFBundleName": NOM_APP,
+            "CFBundleDisplayName": NOM_APP,
+            "CFBundleExecutable": EXECUTABLE,
+            "CFBundlePackageType": "APPL",
+            "CFBundleIconFile": "AppIcon",
+            "CFBundleShortVersionString": "1.0",
+            "CFBundleVersion": "1",
+            "LSMinimumSystemVersion": "15.0",
+            "LSUIElement": True,  # icône dans la barre des menus seulement, pas dans le Dock
+            "NSMicrophoneUsageDescription": "Enregistrer ta voix pendant les entretiens.",
+            # Chemins du projet, lus par l'app
+            "CDProjet": DOSSIER_PROJET,
+            "CDPython": python,
+            "CDBruts": DOSSIER_BRUTS,
+            "CDATraiter": DOSSIER_A_TRAITER,
+            "CDTranscripts": DOSSIER_TRANSCRIPTS,
+            "CDArchives": DOSSIER_ARCHIVES,
+            "CDCache": DOSSIER_CACHE_TRANSCRIPTS,
+            "CDCorbeille": DOSSIER_CORBEILLE,
+            "CDDureeCorbeille": DUREE_CORBEILLE_JOURS,
+            "CDJournaux": os.path.join(DOSSIER_ETAT, "journaux"),
+            "CDProgression": progression.FICHIER,
+        }, f)
+
+    # Signature locale : nécessaire pour que macOS mémorise les autorisations (micro, audio système)
+    subprocess.run(["codesign", "--force", "--sign", "-", APP], check=True)
+    # Le Finder et les notifications gardent l'ancienne icône en cache sans ce signal
+    subprocess.run(["touch", APP], check=False)
+    subprocess.run(["open", APP], check=True)
+    print(f"App installée et lancée : {APP}")
+    print("Pour l'ouvrir depuis le Finder : Applications (de ton dossier perso) > Calls Debrief, ou Spotlight.")

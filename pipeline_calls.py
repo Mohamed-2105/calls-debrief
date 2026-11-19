@@ -2,6 +2,7 @@ import os
 import traceback
 
 from calls_debrief.config import DOSSIER_A_TRAITER, DOSSIER_TRANSCRIPTS, EXTENSIONS_AUDIO, EXTENSIONS_TEXTE, NOM_CANDIDAT
+from calls_debrief import progression
 from calls_debrief.etat import cle_fichier
 from calls_debrief.etapes.transcription import obtenir_transcript
 from calls_debrief.etapes.archivage import sauvegarder_transcript
@@ -30,6 +31,7 @@ def lancer_pipeline_calls():
     echecs = []
     for fichier in fichiers:
         print(f"\nTraitement : {fichier}")
+        progression.etape("Lecture du fichier", fichier=fichier)
         try:
             traiter_fichier(os.path.join(DOSSIER_A_TRAITER, fichier))
         except Exception:

@@ -3,6 +3,7 @@
 
 # Local state and personal Notion database ID
 .etat/
+Corbeille/
 .calls_database_id
 
 # Python

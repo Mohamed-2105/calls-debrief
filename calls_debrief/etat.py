@@ -14,8 +14,8 @@ def cle_fichier(chemin: str) -> str:
     return f"{os.path.basename(chemin)}|{os.path.getsize(chemin)}"
 
 # --- Cache des transcriptions (évite de relancer Whisper après un échec Gemini/Notion) ---
-def _chemin_cache(cle: str) -> str:
-    return os.path.join(DOSSIER_CACHE_TRANSCRIPTS, cle.replace("|", "_").replace(os.sep, "_") + ".txt")
+def _chemin_cache(cle: str, extension: str = ".txt") -> str:
+    return os.path.join(DOSSIER_CACHE_TRANSCRIPTS, cle.replace("|", "_").replace(os.sep, "_") + extension)
 
 def lire_transcript_cache(cle: str) -> Optional[str]:
     try:
@@ -29,11 +29,25 @@ def ecrire_transcript_cache(cle: str, texte: str):
     with open(_chemin_cache(cle), "w", encoding="utf-8") as f:
         f.write(texte)
 
-def supprimer_transcript_cache(cle: str):
+# Segments Whisper bruts : écrits avant pyannote, pour ne jamais refaire Whisper si la diarisation plante
+def lire_segments_cache(cle: str) -> Optional[list]:
     try:
-        os.remove(_chemin_cache(cle))
-    except FileNotFoundError:
-        pass
+        with open(_chemin_cache(cle, ".segments.json"), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+def ecrire_segments_cache(cle: str, segments: list):
+    os.makedirs(DOSSIER_CACHE_TRANSCRIPTS, exist_ok=True)
+    with open(_chemin_cache(cle, ".segments.json"), "w", encoding="utf-8") as f:
+        json.dump(segments, f, ensure_ascii=False)
+
+def supprimer_transcript_cache(cle: str):
+    for extension in (".txt", ".segments.json"):
+        try:
+            os.remove(_chemin_cache(cle, extension))
+        except FileNotFoundError:
+            pass
 
 # --- Registre des envois Notion (évite un doublon si l'archivage échoue) ---
 def _lire_envoyes() -> dict:

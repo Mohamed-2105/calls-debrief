@@ -21,10 +21,16 @@ DOSSIER_A_TRAITER = os.path.join(BASE_DRIVE, "01_A_Traiter")
 DOSSIER_ARCHIVES = os.path.join(BASE_DRIVE, "02_Archives")
 # Transcriptions telles qu'envoyées à Gemini (avec locuteurs si la diarisation a tourné)
 DOSSIER_TRANSCRIPTS = os.path.join(BASE_DRIVE, "03_Transcripts")
+# Corbeille : appels supprimés depuis l'app (transcript + audio + cache), effacés pour de bon après N jours.
+# Après modification, relancer `python installer_app.py` pour que l'app prenne la nouvelle valeur.
+DOSSIER_CORBEILLE = os.path.join(DOSSIER_PROJET, "Corbeille")
+DUREE_CORBEILLE_JOURS = 30
 
 EXTENSIONS_AUDIO = ('.m4a', '.mp3', '.wav')
 EXTENSIONS_TEXTE = ('.txt', '.vtt', '.srt')
 
 MODELE_WHISPER = "mlx-community/whisper-large-v3-turbo"
 MODELE_DIARISATION = "pyannote/speaker-diarization-community-1"
+# Matériel pour pyannote : "cpu" (moins de mémoire) ou "mps" (GPU Apple, plus rapide mais plus gourmand)
+DIARISATION_DEVICE = os.getenv("DIARISATION_DEVICE", "cpu").strip().lower()
 MODELES_GEMINI = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
