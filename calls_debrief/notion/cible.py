@@ -4,11 +4,10 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
 
 import httpx
 
-from calls_debrief.config import NOTION_TOKEN, NOTION_CIBLE, FICHIER_CIBLE_HERITE
+from calls_debrief.config import FICHIER_CIBLE_HERITE, NOTION_CIBLE, NOTION_TOKEN
 from calls_debrief.notion.blocs import LIMITE_TEXTE_NOTION
 
 NOTION_API = "https://api.notion.com/v1"
@@ -34,7 +33,7 @@ def normaliser_nom(nom: str) -> str:
     nom = "".join(c for c in nom if not unicodedata.combining(c))
     return " ".join(nom.casefold().split())
 
-def extraire_id(valeur: str) -> Optional[str]:
+def extraire_id(valeur: str) -> str | None:
     """Accepte un ID brut ou un lien Notion (le dernier identifiant du lien est retenu)."""
     ids = re.findall(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}", valeur.split("?")[0].lower())
     return ids[-1].replace("-", "") if ids else None
@@ -45,7 +44,7 @@ class CibleNotion:
     est_base: bool
     colonnes: dict = field(default_factory=dict)  # nom réel -> définition Notion (vide pour une page)
 
-    def colonne(self, champ: str) -> Optional[str]:
+    def colonne(self, champ: str) -> str | None:
         """Nom réel de la colonne correspondant au champ, ou None si la base ne l'a pas."""
         noms, types = COLONNES_CONNUES[champ]
         for nom_reel, definition in self.colonnes.items():
@@ -58,7 +57,7 @@ class CibleNotion:
             return "title"
         return next(nom for nom, definition in self.colonnes.items() if definition["type"] == "title")
 
-    def options_espace(self) -> Optional[List[str]]:
+    def options_espace(self) -> list[str] | None:
         """Options de la colonne Espace, que Gemini devra choisir ; None si la colonne n'existe pas."""
         nom = self.colonne("espace")
         if not nom:
@@ -68,7 +67,7 @@ class CibleNotion:
 def _lire_id_cible() -> str:
     valeur = NOTION_CIBLE
     if not valeur and os.path.exists(FICHIER_CIBLE_HERITE):
-        with open(FICHIER_CIBLE_HERITE, "r") as f:
+        with open(FICHIER_CIBLE_HERITE) as f:
             valeur = f.read().strip()
     if not valeur:
         raise RuntimeError("Aucune cible Notion : définis NOTION_TARGET dans .env (ID ou lien d'une page ou d'une base).")
@@ -117,7 +116,7 @@ def _valeur_notion(type_colonne: str, valeur):
         return {"rich_text": [{"text": {"content": ", ".join(valeur)[:LIMITE_TEXTE_NOTION]}}]}
     raise ValueError(f"Type de colonne non géré : {type_colonne}")
 
-def _date_valide(date: Optional[str]) -> Optional[str]:
+def _date_valide(date: str | None) -> str | None:
     try:
         datetime.strptime(date or "", "%Y-%m-%d")
         return date

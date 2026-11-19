@@ -33,6 +33,7 @@ Audio files go through two local models. Each one runs in its own process, so it
 The two are then merged in `fusionner()` (`calls_debrief/etapes/transcription.py`):
 
 - Each Whisper segment goes to the speaker whose turns overlap it the most.
+- A speaker with less than `DUREE_MIN_LOCUTEUR` seconds (20 s) of speech over the whole call is treated as a false detection (one voice split in two, background noise): their segments go to the next most present speaker.
 - A segment that no turn overlaps at all is dropped. pyannote's turns double as voice activity detection (VAD): if it heard no voice there, the text is something Whisper made up over silence (typically the same phrase repeated at the start of a recording).
 - Consecutive segments from the same speaker are joined into one line.
 
@@ -45,7 +46,17 @@ SPEAKER_01 : So maybe we just dive in. […] what are you looking for?
 SPEAKER_00 : Super clear. So I'm actually a student in a data science master's program, […]
 ```
 
-pyannote doesn't know names, only that there are distinct voices. The prompt tells Gemini that these labels come from automatic detection and that it must work out from context which one is the candidate (`CANDIDATE_NAME`).
+Before the merge, Whisper's hallucinations are removed locally (`nettoyer_texte()`): a sentence repeated several times in a row is kept once, a segment that is only the same sentence repeated 3+ times is dropped ("Thank you. Thank you. Thank you…"), and known subtitle artefacts ("Sous-titres réalisés par…") are removed. Whisper also runs with `condition_on_previous_text=False`, which stops most of these loops at the source.
+
+### Naming speakers and the call (you validate)
+
+pyannote doesn't know names, only that there are distinct voices. After each transcription, `etapes/identification.py` asks Gemini to pre-fill who is behind each `SPEAKER_XX` and a name for the call, in the format `Company - First Last (Role)` (e.g. `Acme - Julie Martin (Head of GTM Eng.)`). Gemini only returns these names, it never rewrites the transcript.
+
+Nothing is applied automatically. The proposal is stored in `.etat/propositions.json`, and the app shows it above the transcript (✨ in the list): each label with a typical line to recognise the voice, an editable name with suggestions, and the call name. **Valider** renames the call (audio, transcript and cache together) and replaces the labels in the transcript; giving two labels the same name merges their lines. **Ignorer** keeps `SPEAKER_XX`. Without `GEMINI_API_KEY`, or if Gemini fails, the panel still appears with empty fields.
+
+Files that already have a transcript in `03_Transcripts` are no longer reprocessed.
+
+If a transcript still has `SPEAKER_XX` labels when it reaches the debrief step, the prompt tells Gemini that they come from automatic detection and that it must work out from context which one is the candidate (`CANDIDATE_NAME`).
 
 Diarization is optional: without `HF_TOKEN`, or if pyannote fails (model access, network, killed by macOS for lack of memory…), the pipeline falls back to Whisper's plain text and Gemini infers speakers from content alone. Whisper's segments are cached in `.etat/transcripts/` *before* pyannote runs, so the next run only retries diarization.
 
@@ -59,17 +70,25 @@ calls-debrief/
 ├── outils/
 │   ├── commun/Capture.swift   # capture engine: computer sound + microphone, via ScreenCaptureKit
 │   ├── app/main.swift         # menu bar app: call detection, recording, automatic transcription
+│   ├── app/Fenetre.swift      # main window: history, validation panel, categories, summaries
+│   ├── app/Prompts.swift      # categories, summary formats, base prompts window
 │   └── enregistreur/main.swift  # terminal recorder
 └── calls_debrief/
     ├── config.py              # environment variables, folders, extensions, model names
     ├── schemas.py             # Pydantic schema of the debrief (Gemini's response schema)
-    ├── etat.py                # local state in .etat/: transcript and segment cache, files already sent
+    ├── etat.py                # local state in .etat/: transcript and segment cache, files already sent, proposals
+    ├── gemini.py              # Gemini calls (JSON or plain text), retries and model fallback
+    ├── resume.py              # AI summary of a call, run from the app (formats and default prompts)
+    ├── secours.py             # summary fallback on OVHcloud AI Endpoints when Gemini fails
+    ├── claude.py              # Claude API calls (Sonnet / Haiku), cost logging
+    ├── nettoyage.py           # light transcript cleanup by Claude Haiku (raw kept in 03_Transcripts/.bruts)
     ├── enregistrement.py      # compiles the terminal recorder, mixes the two tracks into 01_A_Traiter
     ├── apres_enregistrement.py  # run by the app after a recording: mix, then transcribe
     ├── app.py                 # builds ~/Applications/Calls Debrief.app
     ├── etapes/                # pipeline steps
-    │   ├── transcription.py   # mlx-whisper + pyannote and their merge; .vtt/.srt cleanup
-    │   ├── analyse.py         # Gemini prompt and retry logic
+    │   ├── transcription.py   # mlx-whisper + pyannote and their merge, hallucination filters; .vtt/.srt cleanup
+    │   ├── identification.py  # speaker names, call name and category pre-filled by Gemini, validated in the app
+    │   ├── analyse.py         # Gemini debrief prompt
     │   └── archivage.py       # move to 02_Archives, save transcripts to 03_Transcripts, without overwriting
     └── notion/                # Notion export
         ├── cible.py           # detects database vs page, maps the debrief onto existing columns
@@ -199,7 +218,27 @@ Open **Calls Debrief** from the Finder (*Applications* in your home folder, i.e.
 
 **Deleting**: the trash button, right-click → *Mettre à la corbeille*, or the Delete key. All the call's files (transcript, audio, cache) move to `Corbeille/<name> — supprimé le <date>/` in the project folder, sorted by origin folder: to restore a call, move them back. Menu → *Ouvrir la corbeille* opens it. Items older than 30 days are deleted for good (checked at launch and every hour); change `DUREE_CORBEILLE_JOURS` (or `DOSSIER_CORBEILLE`) in `calls_debrief/config.py`, then re-run `installer_app.py`.
 
-Renaming and deleting are disabled while a transcription runs.
+Renaming and deleting are disabled while a transcription runs (and, for one call, while its AI summary is being generated).
+
+### Transcript cleanup (Claude Haiku)
+
+With `ANTHROPIC_API_KEY` set, validating (or ignoring) the names in the app starts a light cleanup of the transcript by Claude Haiku (`calls_debrief/nettoyage.py`, about 1 cent and 30 seconds per call): it fixes misrecognised words (proper nouns, tools, jargon: "Cloud Code" → "Claude Code", "outband" → "outbound"), punctuation and leftover hesitations, and keeps everything else as said (verbal tics, swearing, unfinished sentences), so interview feedback can still judge how you speak. Whisper already drops most "euh". The raw transcript is kept in `03_Transcripts/.bruts/` (renamed and trashed with the call); a new cleanup always starts from it. The transcript is cut into chunks; a chunk whose cleaned version is much shorter or longer than the original, or shows a speaker that wasn't there, keeps its raw text. Use the *Nettoyer* button (or right-click) for older transcripts.
+
+### Categories and AI summaries
+
+**Categories**: each call is *Entretien*, *Call pro* or *Call perso*. Gemini proposes one at the end of the transcription, in the validation panel next to the call name; change it anytime from the menu under the call's date or with right-click → *Catégorie*. The menu at the top of the list filters calls by category (or shows *Non classés*). Categories are stored in `03_Transcripts/.calls-debrief.json`, next to the dates.
+
+**AI summary**: the *Résumé IA* button above a transcript opens a sheet with:
+- the **format**: *Entretien*, *Call pro*, *Call perso* or *Neutre* ("Résume ce call."). It defaults to the call's category (Neutre if it has none);
+- the format's **prompt**, pre-filled and editable: your changes apply to this summary only (*Revenir au prompt de base* undoes them).
+
+Gemini runs in the background (`python -m calls_debrief.resume`, log in `.etat/journaux/…-resume.log`), even while another call is being transcribed, and a notification tells you when it's done. The tab shows the current step.
+
+**Models**: with `ANTHROPIC_API_KEY` in `.env`, *Entretien* summaries use **Claude Sonnet 5.5** (medium reasoning effort, about 5–8 cents each) and the other formats **Claude Haiku 5.5** (about 0.3 cent); each summary's first line shows the model and its real cost, and every Claude call is logged to `.etat/couts_claude.jsonl`. Speaker names, call name and category also go to Haiku first, then Gemini. If Claude fails or has no key, summaries go to Gemini (one try per model), then to **OVHcloud AI Endpoints** (`calls_debrief/secours.py`, model `MODELE_SECOURS` in `config.py`, EU-hosted, about 1 minute). It works without an account (anonymous access, 2 requests/min per model); an `OVH_AI_ENDPOINTS_ACCESS_TOKEN` in `.env` (from a paid Public Cloud project) raises the limit. The summary's first line says which model wrote it. Formatting rules (Markdown, French, nothing invented) and the transcript are always appended to the prompt. The summary is saved as `CALLS_FOLDER/04_Resumes/<call name>.md` and shown in the *Résumé* tab; each call has one summary, and generating again replaces it. Renaming or deleting a call carries its summary along.
+
+**Your profile**: the same window has a *Mon profil* tab: a few lines about you (background, what you're looking for, projects to highlight, known weak spots in interviews), saved to `.etat/profil.md` and added to every summary's context.
+
+**Base prompts**: menu bar → *Prompts et profil des résumés…* (or the link in the sheet) to edit each format's default prompt. Changes are saved to `.etat/prompts.json`; *Rétablir le prompt par défaut* goes back to the built-in prompt from `calls_debrief/resume.py`.
 
 ### Phone calls
 
@@ -208,6 +247,14 @@ Record with Dictaphone (Voice Memos) or the iPhone's call recording, then get th
 - **Otherwise**: AirDrop it to the Mac, then drag it from Downloads onto the drop zone.
 
 **Always tell the other participants that you are recording.** In France, recording a private conversation without consent is an offence (article 226-1 of the Code pénal).
+
+## Checks
+
+```bash
+./verifier.sh
+```
+
+Runs `ruff check --fix`, then `ruff check` (rules in `pyproject.toml`), imports every Python module, and type-checks the Swift app. Needs `ruff` (`brew install ruff`).
 
 ## Configuration
 

@@ -4,7 +4,6 @@
 import json
 import os
 import time
-from typing import Optional
 
 from calls_debrief.etat import DOSSIER_ETAT
 
@@ -26,7 +25,7 @@ def _ecrire(donnees: dict):
         json.dump(donnees, f, ensure_ascii=False)
     os.replace(temporaire, FICHIER)  # l'app ne lit jamais un fichier à moitié écrit
 
-def etape(texte: str, fichier: Optional[str] = None):
+def etape(texte: str, fichier: str | None = None):
     """Nouvelle étape (pourcentage remis à zéro). fichier : nom du fichier traité, gardé si absent."""
     donnees = _lire()
     if fichier is not None:

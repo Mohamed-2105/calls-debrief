@@ -1,14 +1,7 @@
-import time
-import httpx
-from google import genai
-from google.genai import errors
 
-from calls_debrief.config import GEMINI_API_KEY, MODELES_GEMINI, NOM_CANDIDAT
-from typing import List, Optional
-
+from calls_debrief.config import NOM_CANDIDAT
+from calls_debrief.gemini import generer_json
 from calls_debrief.schemas import CompteRenduDebrief, schema_debrief
-
-client = genai.Client(api_key=GEMINI_API_KEY)
 
 PROMPT_DEBRIEF = """Tu es un analyste d'entretiens neutre, rigoureux et objectif. Tu réalises le débriefing d'un entretien pour {nom_candidat}.
 
@@ -41,19 +34,7 @@ POSTURE D'ÉVALUATION (ZERO COMPLAISANCE, ZERO AGRESSIVITÉ) :
 Transcription brute :
 {texte_brut}"""
 
-NB_TENTATIVES = 3
-
-class ReponseInvalide(Exception):
-    """Gemini a répondu, mais sans JSON exploitable."""
-
-def _erreur_temporaire(e: Exception) -> bool:
-    """Vrai si un nouvel essai sur le même modèle a des chances de réussir."""
-    if isinstance(e, errors.APIError):
-        return e.code == 429 or e.code >= 500
-    # Réseau coupé, timeout ou réponse tronquée : on réessaie
-    return isinstance(e, (httpx.TransportError, ReponseInvalide))
-
-def analyser_transcript(texte_brut: str, options_espace: Optional[List[str]] = None) -> CompteRenduDebrief:
+def analyser_transcript(texte_brut: str, options_espace: list[str] | None = None) -> CompteRenduDebrief:
     """options_espace : options de la colonne Espace de la base Notion cible (None si elle n'existe pas)."""
     consigne_classification = ""
     if options_espace:
@@ -64,35 +45,4 @@ def analyser_transcript(texte_brut: str, options_espace: Optional[List[str]] = N
     prompt = PROMPT_DEBRIEF.format(
         texte_brut=texte_brut, consigne_classification=consigne_classification, nom_candidat=NOM_CANDIDAT
     )
-    schema = schema_debrief(options_espace)
-    dernier_erreur = None
-
-    for nom_modele in MODELES_GEMINI:
-        for tentative in range(1, NB_TENTATIVES + 1):
-            try:
-                response = client.models.generate_content(
-                    model=nom_modele,
-                    contents=prompt,
-                    config={
-                        "response_mime_type": "application/json",
-                        "response_schema": schema,
-                        "temperature": 0.0
-                    }
-                )
-                if response.parsed is None:
-                    raise ReponseInvalide(f"réponse non exploitable : {(response.text or '')[:200]!r}")
-                return response.parsed
-            except Exception as e:
-                dernier_erreur = e
-                if not _erreur_temporaire(e):
-                    # Clé invalide, modèle inexistant, requête refusée : inutile d'attendre
-                    print(f"Modèle {nom_modele} : erreur définitive ({e}), passage au modèle suivant.")
-                    break
-                if tentative == NB_TENTATIVES:
-                    print(f"Modèle {nom_modele} : {NB_TENTATIVES} échecs ({e}), passage au modèle suivant.")
-                    break
-                attente = 20 * tentative   # 20s, 40s
-                print(f"Modèle {nom_modele} indisponible (tentative {tentative}/{NB_TENTATIVES} : {e}), nouvel essai dans {attente}s...")
-                time.sleep(attente)
-
-    raise RuntimeError(f"Échec de l'analyse avec tous les modèles : {dernier_erreur}")
+    return generer_json(prompt, schema_debrief(options_espace))

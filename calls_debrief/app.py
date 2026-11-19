@@ -7,10 +7,19 @@ import sys
 import tempfile
 
 from calls_debrief import progression
-from calls_debrief.config import (DOSSIER_A_TRAITER, DOSSIER_ARCHIVES, DOSSIER_CORBEILLE, DOSSIER_PROJET,
-                                  DOSSIER_TRANSCRIPTS, DUREE_CORBEILLE_JOURS)
+from calls_debrief.config import (
+    DOSSIER_A_TRAITER,
+    DOSSIER_ARCHIVES,
+    DOSSIER_CORBEILLE,
+    DOSSIER_PROJET,
+    DOSSIER_RESUMES,
+    DOSSIER_TRANSCRIPTS,
+    DUREE_CORBEILLE_JOURS,
+    NOM_CANDIDAT,
+)
 from calls_debrief.enregistrement import DOSSIER_BRUTS, DOSSIER_OUTILS, compiler
-from calls_debrief.etat import DOSSIER_CACHE_TRANSCRIPTS, DOSSIER_ETAT
+from calls_debrief.etat import DOSSIER_CACHE_TRANSCRIPTS, DOSSIER_ETAT, FICHIER_PROFIL, FICHIER_PROMPTS, FICHIER_PROPOSITIONS
+from calls_debrief.resume import PROMPTS_DEFAUT
 
 NOM_APP = "Calls Debrief"
 EXECUTABLE = "CallsDebrief"
@@ -45,6 +54,7 @@ def installer():
              os.path.join(contenu, "MacOS", EXECUTABLE))
 
     creer_icone(os.path.join(contenu, "Resources", "AppIcon.icns"))
+    os.makedirs(DOSSIER_RESUMES, exist_ok=True)
 
     with open(os.path.join(contenu, "Info.plist"), "wb") as f:
         plistlib.dump({
@@ -65,12 +75,18 @@ def installer():
             "CDBruts": DOSSIER_BRUTS,
             "CDATraiter": DOSSIER_A_TRAITER,
             "CDTranscripts": DOSSIER_TRANSCRIPTS,
+            "CDResumes": DOSSIER_RESUMES,
             "CDArchives": DOSSIER_ARCHIVES,
             "CDCache": DOSSIER_CACHE_TRANSCRIPTS,
             "CDCorbeille": DOSSIER_CORBEILLE,
             "CDDureeCorbeille": DUREE_CORBEILLE_JOURS,
             "CDJournaux": os.path.join(DOSSIER_ETAT, "journaux"),
             "CDProgression": progression.FICHIER,
+            "CDPropositions": FICHIER_PROPOSITIONS,
+            "CDPrompts": FICHIER_PROMPTS,          # prompts des résumés modifiés dans l'app
+            "CDProfil": FICHIER_PROFIL,            # ton profil, ajouté au contexte des résumés
+            "CDPromptsDefaut": PROMPTS_DEFAUT,     # pour « Rétablir le prompt par défaut »
+            "CDCandidat": NOM_CANDIDAT,  # proposé en premier dans les listes de noms du panneau de validation
         }, f)
 
     # Signature locale : nécessaire pour que macOS mémorise les autorisations (micro, audio système)

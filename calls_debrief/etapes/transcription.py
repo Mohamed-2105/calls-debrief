@@ -3,10 +3,16 @@ import multiprocessing
 import re
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from typing import Optional
 
 from calls_debrief import etat, progression
-from calls_debrief.config import DIARISATION_DEVICE, EXTENSIONS_AUDIO, HF_TOKEN, MODELE_DIARISATION, MODELE_WHISPER
+from calls_debrief.config import (
+    DIARISATION_DEVICE,
+    DUREE_MIN_LOCUTEUR,
+    EXTENSIONS_AUDIO,
+    HF_TOKEN,
+    MODELE_DIARISATION,
+    MODELE_WHISPER,
+)
 
 # Chargement de FFmpeg pour la lecture des audios
 try:
@@ -28,6 +34,7 @@ def _executer_isole(fonction, *args):
 def _transcrire(chemin: str) -> list:
     """(Processus enfant) Segments Whisper [{start, end, text}]."""
     import sys
+
     import mlx_whisper
     import tqdm
 
@@ -39,7 +46,8 @@ def _transcrire(chemin: str) -> list:
             return resultat
 
     sys.modules["mlx_whisper.transcribe"].tqdm.tqdm = Suivi
-    res = mlx_whisper.transcribe(chemin, path_or_hf_repo=MODELE_WHISPER, verbose=False)
+    # Sans le texte précédent comme contexte, Whisper ne s'enferme plus dans une boucle ("Thank you. Thank you…")
+    res = mlx_whisper.transcribe(chemin, path_or_hf_repo=MODELE_WHISPER, verbose=False, condition_on_previous_text=False)
     return [{"start": s["start"], "end": s["end"], "text": s["text"]} for s in res["segments"]]
 
 def _diariser(chemin: str) -> list:
@@ -83,9 +91,45 @@ def diariser(chemin: str) -> list:
         print(f"Diarisation impossible ({type(e).__name__}: {e}) : transcription sans locuteurs.")
     return []
 
+# Phrases que Whisper invente sur les silences (héritées des sous-titres de vidéos de son entraînement)
+PHRASES_PARASITES = ("sous-titres réalisés par", "amara.org", "sous-titrage st'", "merci d'avoir regardé cette vidéo")
+_PHRASE = re.compile(r"[^.!?…]+[.!?…]*")
+
+def _cle(phrase: str) -> str:
+    return re.sub(r"\W+", " ", phrase.lower()).strip()
+
+def _sans_repetitions(phrases: list) -> list:
+    """Une phrase répétée plusieurs fois de suite n'est gardée qu'une fois."""
+    gardees = []
+    for p in phrases:
+        if not gardees or _cle(p) != _cle(gardees[-1]):
+            gardees.append(p)
+    return gardees
+
+def nettoyer_texte(texte: str) -> str:
+    """Retire d'un segment Whisper les phrases parasites et les répétitions en boucle.
+    Un segment qui n'est qu'une même phrase répétée au moins 3 fois est une hallucination : il est vidé."""
+    phrases = [p.strip() for p in _PHRASE.findall(texte) if p.strip()]
+    phrases = [p for p in phrases if not any(x in p.lower() for x in PHRASES_PARASITES)]
+    gardees = _sans_repetitions(phrases)
+    if len(gardees) == 1 and len(phrases) >= 3:
+        return ""
+    return " ".join(gardees)
+
+def nettoyer_segments(segments: list) -> list:
+    return [dict(s, text=t) for s in segments if (t := nettoyer_texte(s["text"]))]
+
 def fusionner(segments: list, tours: list) -> str:
     """Attribue à chaque segment Whisper le locuteur qui le recouvre le plus, et regroupe les répliques."""
-    lignes, precedent = [], None
+    # Locuteurs qui ne parlent presque pas : le plus souvent une voix découpée en deux, ou un bruit pris pour une voix.
+    # Leurs segments vont au locuteur suivant le plus présent (on garde toujours le locuteur principal).
+    durees = {}
+    for debut, fin, loc in tours:
+        durees[loc] = durees.get(loc, 0) + fin - debut
+    principal = max(durees, key=durees.get, default=None)
+    mineurs = {loc for loc, d in durees.items() if d < DUREE_MIN_LOCUTEUR and loc != principal}
+
+    repliques = []  # [locuteur, [phrases]]
     for seg in segments:
         recouvrements = {}
         for debut, fin, loc in tours:
@@ -96,15 +140,20 @@ def fusionner(segments: list, tours: list) -> str:
         # Aucune voix détectée par pyannote sur ce segment : texte inventé par Whisper sur un silence
         if not recouvrements or not texte:
             continue
-        loc = max(recouvrements, key=recouvrements.get)
-        if loc == precedent:
-            lignes[-1] += " " + texte
+        precedent = repliques[-1][0] if repliques else None
+        candidats = {loc: r for loc, r in recouvrements.items() if loc not in mineurs}
+        if candidats:
+            loc = max(candidats, key=candidats.get)
         else:
-            lignes.append(f"{loc} : {texte}")
-            precedent = loc
-    return "\n".join(lignes)
+            loc = precedent or max(recouvrements, key=recouvrements.get)
+        if loc == precedent:
+            repliques[-1][1].append(texte)
+        else:
+            repliques.append([loc, [texte]])
+    # Un segment identique au précédent du même locuteur ("Thank you." puis "Thank you.") n'est gardé qu'une fois
+    return "\n".join(f"{loc} : {' '.join(_sans_repetitions(textes))}" for loc, textes in repliques)
 
-def obtenir_transcript(chemin: str, cle: str) -> Optional[str]:
+def obtenir_transcript(chemin: str, cle: str) -> str | None:
     """Retourne le texte du fichier (transcrit si audio), ou None s'il ne peut pas être traité."""
     if chemin.lower().endswith(EXTENSIONS_AUDIO):
         texte = etat.lire_transcript_cache(cle)
@@ -122,6 +171,7 @@ def obtenir_transcript(chemin: str, cle: str) -> Optional[str]:
             etat.ecrire_segments_cache(cle, segments)  # gardé même si pyannote plante ensuite
         else:
             print("Segments Whisper récupérés depuis le cache.")
+        segments = nettoyer_segments(segments)
         print("Identification des locuteurs via pyannote...")
         progression.etape("Identification des locuteurs")
         tours = diariser(chemin)
@@ -132,7 +182,7 @@ def obtenir_transcript(chemin: str, cle: str) -> Optional[str]:
         etat.ecrire_transcript_cache(cle, texte)
         return texte
 
-    with open(chemin, "r", encoding="utf-8", errors="ignore") as f:
+    with open(chemin, encoding="utf-8", errors="ignore") as f:
         texte = f.read()
     if chemin.lower().endswith(('.vtt', '.srt')):
         return nettoyer_sous_titres(texte)

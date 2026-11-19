@@ -1,11 +1,12 @@
-from typing import Optional
+
 import httpx
 
-from calls_debrief.schemas import CompteRenduDebrief
 from calls_debrief.notion.blocs import construire_blocs
-from calls_debrief.notion.cible import CibleNotion, NOTION_API, get_headers, construire_proprietes
+from calls_debrief.notion.cible import NOTION_API, CibleNotion, construire_proprietes, get_headers
+from calls_debrief.schemas import CompteRenduDebrief
 
-def envoyer_debrief_vers_notion(compte_rendu: CompteRenduDebrief, cible: CibleNotion) -> Optional[str]:
+
+def envoyer_debrief_vers_notion(compte_rendu: CompteRenduDebrief, cible: CibleNotion) -> str | None:
     """Crée la page Notion du débrief (ligne de la base ou sous-page) et retourne son URL."""
     headers = get_headers()
     children = construire_blocs(compte_rendu)

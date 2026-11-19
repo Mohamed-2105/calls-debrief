@@ -1,0 +1,10 @@
+[tool.ruff]
+target-version = "py313"
+line-length = 130
+extend-exclude = [".etat", "Corbeille"]
+
+[tool.ruff.lint]
+# Erreurs (E, F, W), imports triés (I), syntaxe moderne (UP), bugs probables (B)
+select = ["E", "F", "W", "I", "UP", "B"]
+# Les prompts sont de longues chaînes de texte : pas de limite de longueur de ligne
+ignore = ["E501"]

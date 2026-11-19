@@ -16,12 +16,18 @@ struct Reglages {
     let bruts: URL
     let aTraiter: URL
     let transcripts: URL
+    let resumes: URL       // 04_Resumes : résumés IA (Markdown), un par appel
     let archives: URL
     let cache: URL
     let journaux: URL
     let progression: URL
+    let propositions: URL  // noms des locuteurs et de l'appel, préremplis par Gemini, à valider
+    let candidat: String   // CANDIDATE_NAME : premier nom suggéré dans le panneau de validation
     let corbeille: URL
     let dureeCorbeille: Int  // jours avant suppression définitive
+    let prompts: URL         // prompts des résumés modifiés dans l'app
+    let profil: URL          // ton profil (Markdown), ajouté au contexte des résumés
+    let promptsDefaut: [String: String]
 
     static func lire() -> Reglages {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -31,9 +37,11 @@ struct Reglages {
         }
         return Reglages(
             projet: chemin("CDProjet"), python: chemin("CDPython"), bruts: chemin("CDBruts"), aTraiter: chemin("CDATraiter"),
-            transcripts: chemin("CDTranscripts"), archives: chemin("CDArchives"), cache: chemin("CDCache"),
-            journaux: chemin("CDJournaux"), progression: chemin("CDProgression"),
-            corbeille: chemin("CDCorbeille"), dureeCorbeille: info["CDDureeCorbeille"] as? Int ?? 30)
+            transcripts: chemin("CDTranscripts"), resumes: chemin("CDResumes"), archives: chemin("CDArchives"), cache: chemin("CDCache"),
+            journaux: chemin("CDJournaux"), progression: chemin("CDProgression"), propositions: chemin("CDPropositions"),
+            candidat: info["CDCandidat"] as? String ?? "",
+            corbeille: chemin("CDCorbeille"), dureeCorbeille: info["CDDureeCorbeille"] as? Int ?? 30,
+            prompts: chemin("CDPrompts"), profil: chemin("CDProfil"), promptsDefaut: info["CDPromptsDefaut"] as? [String: String] ?? [:])
     }
 }
 
@@ -121,8 +129,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var relancerApresTranscription = false
 
     // Fenêtre principale
-    lazy var historique = Historique(reglages: reglages)
+    lazy var historique: Historique = {
+        let historique = Historique(reglages: reglages)
+        historique.finResume = { [weak self] nom, reussi in
+            if reussi {
+                self?.notifier(titre: "Résumé prêt", texte: Historique.joli(nom), categorie: "TRANSCRIPT")
+            } else {
+                self?.notifier(titre: "Échec du résumé", texte: "Détails dans le journal (menu > Voir le dernier journal).", categorie: "JOURNAL")
+            }
+        }
+        return historique
+    }()
+    lazy var prompts = Prompts(reglages: reglages)
     var fenetre: NSWindow?
+    var fenetrePrompts: NSWindow?
 
     var detectionActive: Bool {
         get { UserDefaults.standard.object(forKey: "detection") as? Bool ?? true }
@@ -143,6 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         item.menu = menu
         menu.delegate = self  // menu reconstruit à chaque ouverture : l'avancement affiché est à jour
         rafraichir()
+        installerMenuEdition()
 
         let centre = UNUserNotificationCenter.current()
         centre.delegate = self
@@ -160,6 +181,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
         // Ouverte depuis le Finder, le Dock ou Spotlight : on montre la fenêtre
         if !lanceeALaConnexion { ouvrirFenetre() }
+    }
+
+    /// Sans barre des menus (app de la barre des menus seulement), ⌘C, ⌘V, ⌘X, ⌘A et ⌘Z ne font rien :
+    /// macOS les fait passer par le menu Édition. Ce menu, jamais affiché, les rend aux champs de texte.
+    func installerMenuEdition() {
+        let principal = NSMenu()
+        let edition = NSMenu(title: "Édition")
+        edition.addItem(withTitle: "Annuler", action: Selector(("undo:")), keyEquivalent: "z")
+        let retablir = edition.addItem(withTitle: "Rétablir", action: Selector(("redo:")), keyEquivalent: "z")
+        retablir.keyEquivalentModifierMask = [.command, .shift]
+        edition.addItem(.separator())
+        edition.addItem(withTitle: "Couper", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edition.addItem(withTitle: "Copier", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edition.addItem(withTitle: "Coller", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edition.addItem(withTitle: "Tout sélectionner", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        let element = NSMenuItem(title: "Édition", action: nil, keyEquivalent: "")
+        element.submenu = edition
+        principal.addItem(element)
+        // ⌘W ferme la fenêtre au premier plan
+        let fenetre = NSMenu(title: "Fenêtre")
+        fenetre.addItem(withTitle: "Fermer", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let elementFenetre = NSMenuItem(title: "Fenêtre", action: nil, keyEquivalent: "")
+        elementFenetre.submenu = fenetre
+        principal.addItem(elementFenetre)
+        NSApp.mainMenu = principal
     }
 
     /// Double-clic sur l'app dans le Finder alors qu'elle tourne déjà
@@ -211,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
         menu.addItem(withTitle: "Ouvrir le dossier des transcripts", action: #selector(ouvrirTranscripts), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Ouvrir la corbeille", action: #selector(ouvrirCorbeille), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Prompts et profil des résumés…", action: #selector(ouvrirPrompts), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Voir le dernier journal", action: #selector(ouvrirJournal), keyEquivalent: "").target = self
         menu.addItem(.separator())
         let detection = menu.addItem(withTitle: "Proposer d'enregistrer les appels", action: #selector(basculerDetection), keyEquivalent: "")
@@ -372,9 +419,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     @objc func ouvrirFenetre() {
         if fenetre == nil {
-            let vue = FenetrePrincipale(historique: historique,
+            let vue = FenetrePrincipale(historique: historique, prompts: prompts,
                                         surImport: { [weak self] in self?.lancerTranscription() },
-                                        ouvrirJournal: { [weak self] in self?.ouvrirJournal() })
+                                        ouvrirJournal: { [weak self] in self?.ouvrirJournal() },
+                                        ouvrirPrompts: { [weak self] in self?.ouvrirPrompts() })
             let fenetre = NSWindow(contentViewController: NSHostingController(rootView: vue))
             fenetre.title = "Calls Debrief"
             fenetre.setContentSize(NSSize(width: 900, height: 600))
@@ -386,6 +434,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         historique.recharger()
         NSApp.activate(ignoringOtherApps: true)
         fenetre?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func ouvrirPrompts() {
+        if fenetrePrompts == nil {
+            let fenetre = NSWindow(contentViewController: NSHostingController(rootView: FenetrePrompts(prompts: prompts)))
+            fenetre.title = "Prompts et profil"
+            fenetre.setContentSize(NSSize(width: 720, height: 460))
+            fenetre.isReleasedWhenClosed = false
+            fenetre.center()
+            fenetre.setFrameAutosaveName("FenetrePrompts")
+            fenetrePrompts = fenetre
+        }
+        prompts.recharger()
+        NSApp.activate(ignoringOtherApps: true)
+        fenetrePrompts?.makeKeyAndOrderFront(nil)
     }
 
     @objc func ouvrirTranscripts() {
