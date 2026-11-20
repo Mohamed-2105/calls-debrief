@@ -846,7 +846,10 @@ struct TexteDefilant: NSViewRepresentable {
         let defilement = NSScrollView()
         defilement.hasVerticalScroller = true
         defilement.drawsBackground = false
-        let vue = ColonneDeLecture(frame: .zero)
+        // TextKit 1 avec mise en page partielle : TextKit 2 réestime la hauteur du document pendant le défilement,
+        // ce qui change la taille de la vue à chaque pas (défilement saccadé en plein écran).
+        let vue = ColonneDeLecture(usingTextLayoutManager: false)
+        vue.layoutManager?.allowsNonContiguousLayout = true
         vue.isEditable = false
         vue.isSelectable = true
         vue.drawsBackground = false
@@ -864,6 +867,12 @@ struct TexteDefilant: NSViewRepresentable {
               vue.textStorage?.isEqual(to: texte) == false else { return }
         vue.textStorage?.setAttributedString(texte)
         vue.scrollToBeginningOfDocument(nil)
+    }
+
+    /// Prend toute la place proposée, sans demander sa taille à AppKit : sinon chaque changement de taille du texte
+    /// (pendant le défilement) relance la mise en page SwiftUI de toute la fenêtre (en-tête, boutons, liste).
+    func sizeThatFits(_ proposition: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        CGSize(width: proposition.width ?? 400, height: proposition.height ?? 400)
     }
 }
 
@@ -1334,6 +1343,8 @@ struct FenetrePrincipale: View {
     /// Appel dont le nom est en cours de modification, et où (liste ou en-tête du transcript)
     @State private var edition: (id: Appel.ID, dansListe: Bool)?
     @State private var erreur: (titre: String, message: String)?
+    /// Barre latérale (liste des appels) affichée ou masquée
+    @State private var colonnes: NavigationSplitViewVisibility = .all
 
     /// Appels de la liste : filtrés par catégorie, puis triés
     private var visibles: [Appel] { tri.trier(historique.appels.filter(filtre.garde)) }
@@ -1344,9 +1355,10 @@ struct FenetrePrincipale: View {
                 BandeauTranscription(historique: historique, ouvrirJournal: ouvrirJournal)
             }
             ZoneDeDepot(historique: historique, surImport: surImport)
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $colonnes) {
                 VStack(spacing: 0) {
                     HStack {
+                        boutonBarreLaterale
                         Text("\(visibles.count) appel\(visibles.count > 1 ? "s" : "")")
                             .font(.caption).foregroundStyle(.secondary)
                         Spacer()
@@ -1364,19 +1376,13 @@ struct FenetrePrincipale: View {
                 }
                 .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 420)
             } detail: {
-                if let appel = historique.appels.first(where: { $0.id == selection }) {
-                    VueTranscript(appel: appel, historique: historique, prompts: prompts,
-                                  peutModifier: !historique.transcriptionEnCours,
-                                  editionNom: enEdition(appel, dansListe: false),
-                                  renommer: { renommer(appel, en: $0) },
-                                  supprimer: { supprimer(appel) },
-                                  definirCategorie: { historique.definirCategorie(appel, $0) },
-                                  validerProposition: { valider(appel, noms: $0, nom: $1, categorie: $2) },
-                                  ignorerProposition: { ignorerProposition(appel) },
-                                  ouvrirPrompts: ouvrirPrompts)
-                    .frame(minWidth: 460)
-                } else {
-                    Text("Choisis un appel à gauche").foregroundStyle(.secondary)
+                HStack(spacing: 0) {
+                    // Barre latérale masquée : bouton pour la réafficher, dans une fine colonne à gauche
+                    if colonnes == .detailOnly {
+                        VStack { boutonBarreLaterale; Spacer() }.padding(8)
+                        Divider()
+                    }
+                    detail
                 }
             }
             .padding(.top, 12)
@@ -1398,6 +1404,35 @@ struct FenetrePrincipale: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(erreur?.message ?? "")
+        }
+    }
+
+    /// Masque ou réaffiche la liste des appels (⌃⌘S)
+    private var boutonBarreLaterale: some View {
+        Button {
+            withAnimation { colonnes = colonnes == .detailOnly ? .all : .detailOnly }
+        } label: {
+            Image(systemName: "sidebar.left")
+        }
+        .buttonStyle(.borderless)
+        .keyboardShortcut("s", modifiers: [.control, .command])
+        .help(colonnes == .detailOnly ? "Afficher la liste des appels (⌃⌘S)" : "Masquer la liste des appels (⌃⌘S)")
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let appel = historique.appels.first(where: { $0.id == selection }) {
+            VueTranscript(appel: appel, historique: historique, prompts: prompts,
+                          peutModifier: !historique.transcriptionEnCours,
+                          editionNom: enEdition(appel, dansListe: false),
+                          renommer: { renommer(appel, en: $0) },
+                          supprimer: { supprimer(appel) },
+                          definirCategorie: { historique.definirCategorie(appel, $0) },
+                          validerProposition: { valider(appel, noms: $0, nom: $1, categorie: $2) },
+                          ignorerProposition: { ignorerProposition(appel) },
+                          ouvrirPrompts: ouvrirPrompts)
+            .frame(minWidth: 460)
+        } else {
+            Text("Choisis un appel à gauche").foregroundStyle(.secondary)
         }
     }
 
