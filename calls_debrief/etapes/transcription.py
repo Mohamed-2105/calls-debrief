@@ -93,7 +93,8 @@ def diariser(chemin: str) -> list:
 
 # Phrases que Whisper invente sur les silences (héritées des sous-titres de vidéos de son entraînement)
 PHRASES_PARASITES = ("sous-titres réalisés par", "amara.org", "sous-titrage st'", "merci d'avoir regardé cette vidéo")
-_PHRASE = re.compile(r"[^.!?…]+[.!?…]*")
+# Une ponctuation collée au mot suivant ne termine pas la phrase : « Amara.org », « Node.js », « 3.5 »
+_PHRASE = re.compile(r"(?:[^.!?…]|[.!?…](?=\w))+[.!?…]*")
 
 def _cle(phrase: str) -> str:
     return re.sub(r"\W+", " ", phrase.lower()).strip()
