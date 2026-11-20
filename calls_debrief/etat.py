@@ -1,4 +1,4 @@
-"""État local du pipeline : transcriptions en cache et fichiers déjà envoyés vers Notion."""
+"""État local du pipeline : transcriptions en cache, propositions de noms, prompts et profil de l'app."""
 import json
 import os
 
@@ -6,13 +6,12 @@ from calls_debrief.config import DOSSIER_PROJET
 
 DOSSIER_ETAT = os.path.join(DOSSIER_PROJET, ".etat")
 DOSSIER_CACHE_TRANSCRIPTS = os.path.join(DOSSIER_ETAT, "transcripts")
-FICHIER_ENVOYES = os.path.join(DOSSIER_ETAT, "envoyes.json")
 
 def cle_fichier(chemin: str) -> str:
-    """Identifie un fichier par son nom et sa taille (stable malgré la synchro Google Drive)."""
+    """Identifie un fichier par son nom et sa taille (stable même si le dossier est copié ou synchronisé)."""
     return f"{os.path.basename(chemin)}|{os.path.getsize(chemin)}"
 
-# --- Cache des transcriptions (évite de relancer Whisper après un échec Gemini/Notion) ---
+# --- Cache des transcriptions (évite de relancer Whisper après un échec) ---
 def _chemin_cache(cle: str, extension: str = ".txt") -> str:
     return os.path.join(DOSSIER_CACHE_TRANSCRIPTS, cle.replace("|", "_").replace(os.sep, "_") + extension)
 
@@ -40,39 +39,6 @@ def ecrire_segments_cache(cle: str, segments: list):
     os.makedirs(DOSSIER_CACHE_TRANSCRIPTS, exist_ok=True)
     with open(_chemin_cache(cle, ".segments.json"), "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False)
-
-def supprimer_transcript_cache(cle: str):
-    for extension in (".txt", ".segments.json"):
-        try:
-            os.remove(_chemin_cache(cle, extension))
-        except FileNotFoundError:
-            pass
-
-# --- Registre des envois Notion (évite un doublon si l'archivage échoue) ---
-def _lire_envoyes() -> dict:
-    try:
-        with open(FICHIER_ENVOYES, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-def _ecrire_envoyes(envoyes: dict):
-    os.makedirs(DOSSIER_ETAT, exist_ok=True)
-    with open(FICHIER_ENVOYES, "w", encoding="utf-8") as f:
-        json.dump(envoyes, f, ensure_ascii=False, indent=2)
-
-def url_deja_envoye(cle: str) -> str | None:
-    return _lire_envoyes().get(cle)
-
-def marquer_envoye(cle: str, url: str | None):
-    envoyes = _lire_envoyes()
-    envoyes[cle] = url or ""
-    _ecrire_envoyes(envoyes)
-
-def oublier_envoi(cle: str):
-    envoyes = _lire_envoyes()
-    if envoyes.pop(cle, None) is not None:
-        _ecrire_envoyes(envoyes)
 
 # --- Propositions à valider dans l'app (noms des locuteurs, nom de l'appel) : {nom du transcript: proposition} ---
 FICHIER_PROPOSITIONS = os.path.join(DOSSIER_ETAT, "propositions.json")

@@ -1,10 +1,9 @@
 # Secrets
 .env
 
-# Local state and personal Notion database ID
+# Local state
 .etat/
 Corbeille/
-.calls_database_id
 
 # Python
 .venv/

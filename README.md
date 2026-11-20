@@ -1,26 +1,23 @@
 # calls-debrief
 
-Turns recordings of job interviews into a structured, coaching-oriented debrief in Notion.
+Records and transcribes calls (job interviews, work and personal calls) locally on a Mac, then writes AI summaries tailored to each kind of call.
 
-Drop an audio file (or a transcript) into a Google Drive folder, run the pipeline, and get a Notion page with:
+A menu bar app records the call (computer sound + microphone), or you drop an audio file or a transcript into it. You get:
 
-- **The role / the company**: everything the interviewer explained (tasks, team, tools, process, next steps), kept faithful to their words
-- **Overall assessment** of the candidate's performance
-- **To-do list**: follow-ups, topics to revise, documents to send
-- **Strengths** and **areas for improvement**
-- **Question-by-question breakdown**: the question as asked, what the recruiter was assessing, the candidate's answer (near-verbatim), and a neutral diagnosis
-
-The analysis is written in French; questions, answers and the role description stay in their original language.
+- **A transcript with speakers**: mlx-whisper + pyannote, run locally
+- **Names pre-filled** for each speaker and for the call, which you validate in the app
+- **A light cleanup** of recognition errors (Claude Haiku)
+- **An AI summary** per call, with an editable prompt per category (*Entretien*, *Call pro*, *Call perso*, *Neutre*)
 
 ## How it works
 
 ```
-01_A_Traiter/           1. Transcription        2. Analysis           3. Export           4. Archive
-  .m4a .mp3 .wav   ──▶  mlx-whisper         ──▶  Gemini (structured ──▶ Notion page   ──▶  02_Archives/
-  .txt .vtt .srt        + pyannote (local)        JSON output)          in a database
+01_A_Traiter/           1. Transcription         2. Names              3. In the app
+  .m4a .mp3 .wav   ──▶  mlx-whisper         ──▶  Claude Haiku /   ──▶  validate names, cleanup,
+  .txt .vtt .srt        + pyannote (local)        Gemini propose       AI summary → 04_Resumes/
                         or read + clean text
                                │
-                               └──▶ 03_Transcripts/ (transcript as sent to Gemini)
+                               └──▶ 03_Transcripts/
 ```
 
 ### Transcription and speaker detection
@@ -37,7 +34,7 @@ The two are then merged in `fusionner()` (`calls_debrief/etapes/transcription.py
 - A segment that no turn overlaps at all is dropped. pyannote's turns double as voice activity detection (VAD): if it heard no voice there, the text is something Whisper made up over silence (typically the same phrase repeated at the start of a recording).
 - Consecutive segments from the same speaker are joined into one line.
 
-The result looks like this, and is what Gemini receives:
+The result looks like this:
 
 ```
 SPEAKER_01 : Yeah, of course. You already talked to Sarah, right?
@@ -56,15 +53,14 @@ Nothing is applied automatically. The proposal is stored in `.etat/propositions.
 
 Files that already have a transcript in `03_Transcripts` are no longer reprocessed.
 
-If a transcript still has `SPEAKER_XX` labels when it reaches the debrief step, the prompt tells Gemini that they come from automatic detection and that it must work out from context which one is the candidate (`CANDIDATE_NAME`).
-
-Diarization is optional: without `HF_TOKEN`, or if pyannote fails (model access, network, killed by macOS for lack of memory…), the pipeline falls back to Whisper's plain text and Gemini infers speakers from content alone. Whisper's segments are cached in `.etat/transcripts/` *before* pyannote runs, so the next run only retries diarization.
+Diarization is optional: without `HF_TOKEN`, or if pyannote fails (model access, network, killed by macOS for lack of memory…), the pipeline falls back to Whisper's plain text, without speaker labels. Whisper's segments are cached in `.etat/transcripts/` *before* pyannote runs, so the next run only retries diarization.
 
 pyannote runs on the CPU by default, in small batches, which keeps its memory low. Set `DIARISATION_DEVICE=mps` to use the Apple GPU instead: faster, but it needs more memory.
 
 ```
 calls-debrief/
 ├── pipeline_calls.py          # entry point
+├── tests/                     # pytest tests (no models, no network)
 ├── installer_app.py           # builds and installs the menu bar app
 ├── enregistrer.py             # records a video call from the terminal
 ├── outils/
@@ -75,8 +71,7 @@ calls-debrief/
 │   └── enregistreur/main.swift  # terminal recorder
 └── calls_debrief/
     ├── config.py              # environment variables, folders, extensions, model names
-    ├── schemas.py             # Pydantic schema of the debrief (Gemini's response schema)
-    ├── etat.py                # local state in .etat/: transcript and segment cache, files already sent, proposals
+    ├── etat.py                # local state in .etat/: transcript and segment cache, name proposals, prompts and profile paths
     ├── gemini.py              # Gemini calls (JSON or plain text), retries and model fallback
     ├── resume.py              # AI summary of a call, run from the app (formats and default prompts)
     ├── secours.py             # summary fallback on OVHcloud AI Endpoints when Gemini fails
@@ -88,28 +83,20 @@ calls-debrief/
     ├── etapes/                # pipeline steps
     │   ├── transcription.py   # mlx-whisper + pyannote and their merge, hallucination filters; .vtt/.srt cleanup
     │   ├── identification.py  # speaker names, call name and category pre-filled by Gemini, validated in the app
-    │   ├── analyse.py         # Gemini debrief prompt
-    │   └── archivage.py       # move to 02_Archives, save transcripts to 03_Transcripts, without overwriting
-    └── notion/                # Notion export
-        ├── cible.py           # detects database vs page, maps the debrief onto existing columns
-        ├── blocs.py           # page content (respects the 2000-character limit)
-        └── export.py          # page creation, appending blocks beyond 100
+    │   └── archivage.py       # saves transcripts to 03_Transcripts without overwriting
 ```
 
 ### Reliability
 
 - **One failing file doesn't stop the batch**: it stays in `01_A_Traiter` and is listed at the end.
-- **Transcripts are cached** until the Notion page is created, so a Gemini or Notion failure never re-runs Whisper.
-- **No duplicate pages**: if archiving fails after the page is created, the next run only archives.
-- **No overwritten archives**: a timestamp is added if the file name already exists in `02_Archives`.
+- **Whisper's output is cached** in `.etat/transcripts/`, so a later failure (pyannote, name proposal) never re-runs Whisper.
+- **No overwritten transcripts**: a timestamp is added if a different transcript with the same name already exists in `03_Transcripts`.
 
 ## Requirements
 
 - macOS on **Apple Silicon** (mlx-whisper runs on the Apple GPU; text transcripts work anywhere)
 - Python 3.13 (tested)
-- A [Gemini API key](https://aistudio.google.com/apikey)
-- A [Notion integration](https://www.notion.so/my-integrations) with access to the target database or page
-- Google Drive for desktop (or any local folder; see `CALLS_FOLDER`)
+- Optional: a [Claude API key](https://console.anthropic.com/) and/or a [Gemini API key](https://aistudio.google.com/apikey) for names, cleanup and summaries
 
 ffmpeg is provided by `static-ffmpeg`, which downloads its binaries on first use. The Whisper model (`whisper-large-v3-turbo`, about 1.6 GB) is downloaded on the first transcription. The pyannote model is downloaded on first use too (requires `HF_TOKEN`).
 
@@ -119,7 +106,7 @@ ffmpeg is provided by `static-ffmpeg`, which downloads its binaries on first use
 git clone <repo-url> calls-debrief
 cd calls-debrief
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt   # requirements.txt + pytest
 cp .env.example .env   # then fill in your keys
 ```
 
@@ -127,39 +114,17 @@ cp .env.example .env   # then fill in your keys
 
 | Variable | Required | Description |
 |---|---|---|
-| `NOTION_TOKEN` | yes | Notion integration secret |
-| `GEMINI_API_KEY` | yes | Gemini API key |
-| `NOTION_TARGET` | yes | ID **or link** of the Notion database or page that receives the debriefs |
-| `CANDIDATE_NAME` | yes | First name of the person being interviewed. Used to tell them apart from the interviewer in the transcript, and in the debrief headings |
+| `CANDIDATE_NAME` | yes | Your first name. Used to tell you apart from the other people in the transcript and in the summaries |
+| `ANTHROPIC_API_KEY` | no | Claude API key: speaker names, transcript cleanup and summaries (see *Models* below) |
+| `GEMINI_API_KEY` | no | Gemini API key: fallback when Claude fails or has no key |
+| `OVH_AI_ENDPOINTS_ACCESS_TOKEN` | no | Raises the rate limit of the OVHcloud summary fallback |
 | `HF_TOKEN` | no | Hugging Face token for speaker diarization. Accept the terms of [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) first. Without it, transcripts have no speaker labels |
 | `DIARISATION_DEVICE` | no | `cpu` (default, uses less memory) or `mps` (Apple GPU, faster but uses more memory) for pyannote |
 | `CALLS_FOLDER` | no | Working folder (default `~/assistant-calls`), e.g. `~/Documents/Calls Debrief`. After changing it, re-run `installer_app.py` so the app uses the new folder |
 
-Share the target with your integration in Notion (`•••` → *Connections*), otherwise the API can't see it.
-
-### Notion target: any database or page
-
-The pipeline reads the target's structure on each run and adapts to it. Nothing needs to be renamed or created.
-
-**A database** → each debrief becomes a row. The page content is always complete; the only thing that varies is which columns get filled:
-
-| Column found in your database | Filled with |
-|---|---|
-| The title column, whatever its name | Interview title |
-| `Espace` (select) | Gemini picks one of **your** existing options |
-| `Catégorie` / `Category` (select) | `Interview` |
-| `Date` / `Date de l'entretien` / `Interview date` (date) | Date mentioned in the interview, if any |
-| `Interlocuteurs` / `Recruteurs` / `Interviewers` (multi-select or text) | Interviewer names and roles |
-
-Names are compared ignoring case, accents and special spaces (`Catégorie`, `categorie` and `Relue ?` with a non-breaking space all match). Missing columns are skipped and listed at startup; other columns are left untouched.
-
-**A plain page** → each debrief is created as a sub-page.
-
-`.calls_database_id` (a file holding an ID) is still read as a fallback when `NOTION_TARGET` is not set.
-
 ### Folders
 
-Set `CALLS_FOLDER` in `.env` to your own folder. The pipeline reads from `CALLS_FOLDER/01_A_Traiter` archives to `CALLS_FOLDER/02_Archives`, and writes each transcript as sent to Gemini (with speaker labels when diarization ran) to `CALLS_FOLDER/03_Transcripts/<file name>.txt`. All three are created if they don't exist.
+Set `CALLS_FOLDER` in `.env` to your own folder. The pipeline reads from `CALLS_FOLDER/01_A_Traiter` (audio stays there after transcription) and writes each transcript (with speaker labels when diarization ran) to `CALLS_FOLDER/03_Transcripts/<file name>.txt`. Summaries go to `CALLS_FOLDER/04_Resumes`. `02_Archives` only holds audio from older versions; the app still lists it.
 
 ## Usage
 
@@ -167,9 +132,9 @@ Set `CALLS_FOLDER` in `.env` to your own folder. The pipeline reads from `CALLS_
 .venv/bin/python pipeline_calls.py
 ```
 
-Every supported file in `01_A_Traiter` is processed. To skip a file, move it out of that folder.
+Every supported file in `01_A_Traiter` that has no transcript yet in `03_Transcripts` is processed. To skip a file, move it out of that folder.
 
-A 30-minute recording takes about 16 minutes on an M1: about 8 for Whisper and 8 for pyannote, plus under a minute for Gemini and Notion. Without `HF_TOKEN`, about 8 minutes. These times were measured with pyannote on the GPU. On the CPU (now the default), pyannote may be slower; this hasn't been measured yet.
+A 30-minute recording takes about 16 minutes on an M1: about 8 for Whisper and 8 for pyannote, plus a few seconds for the name proposal. Without `HF_TOKEN`, about 8 minutes. These times were measured with pyannote on the GPU. On the CPU (now the default), pyannote may be slower; this hasn't been measured yet.
 
 ## Recording an interview
 
@@ -254,7 +219,9 @@ Record with Dictaphone (Voice Memos) or the iPhone's call recording, then get th
 ./verifier.sh
 ```
 
-Runs `ruff check --fix`, then `ruff check` (rules in `pyproject.toml`), imports every Python module, and type-checks the Swift app. Needs `ruff` (`brew install ruff`).
+Runs `ruff check --fix`, then `ruff check` (rules in `pyproject.toml`), imports every Python module, runs the tests in `tests/` (pytest), and type-checks the Swift app. Needs `ruff` (`brew install ruff`) and the dev dependencies (`.venv/bin/pip install -r requirements-dev.txt`).
+
+The tests cover the logic that runs without models or network: Whisper hallucination filters, merging Whisper segments with pyannote turns, `.vtt`/`.srt` cleanup, transcript saving and cache, the name proposal, transcript cleanup safeguards, and the summary model fallback (Claude → Gemini → OVHcloud). API calls are replaced by fakes, and `tests/conftest.py` makes any real call fail the test. Run them alone with `.venv/bin/python -m pytest`.
 
 ## Configuration
 
@@ -263,8 +230,9 @@ In `calls_debrief/config.py`:
 - `MODELES_GEMINI`: Gemini models tried in order
 - `MODELE_WHISPER`: Whisper model from Hugging Face
 - `EXTENSIONS_AUDIO` / `EXTENSIONS_TEXTE`: accepted formats
+- `MODELE_ENTRETIEN` / `MODELE_LEGER`: Claude models for interview summaries / everything else
 
-The prompt (`PROMPT_DEBRIEF` in `calls_debrief/etapes/analyse.py`) and the field descriptions in `calls_debrief/schemas.py` drive what Gemini extracts; edit both to change the debrief.
+Summary prompts are edited in the app (see *Base prompts*); their defaults come from `prompts.json` (or `prompts.example.json`).
 
 ## Limitations
 

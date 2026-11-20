@@ -62,7 +62,7 @@ def mixer(dossier_bruts: str, sortie: str):
     entrees = "".join(f"[a{i}]" for i in range(len(pistes)))
     filtres.append(f"{entrees}amix=inputs={len(pistes)}:duration=longest:normalize=0,aformat=channel_layouts=mono[sortie]")
 
-    # Nom temporaire sans extension audio : ni Google Drive ni le pipeline ne prennent un fichier à moitié écrit
+    # Nom temporaire sans extension audio : le pipeline ne prend pas un fichier à moitié écrit
     temporaire = sortie + ".partiel"
     commande += ["-filter_complex", ";".join(filtres), "-map", "[sortie]", "-c:a", "aac", "-b:a", "96k", "-f", "mp4", temporaire]
     subprocess.run(commande, check=True)
