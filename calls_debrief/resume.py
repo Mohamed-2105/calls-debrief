@@ -3,7 +3,7 @@
     python -m calls_debrief.resume --transcript <03_Transcripts/nom.txt> --format pro [--prompt-stdin]
 
 Le prompt de base du format vient de .etat/prompts.json (modifié dans l'app, fenêtre Prompts), sinon de
-PROMPTS_DEFAUT. Avec --prompt-stdin, le prompt lu sur l'entrée standard le remplace pour ce résumé seulement.
+prompts.json à la racine du projet (tes prompts par défaut, ignoré par git), sinon de prompts.example.json. Avec --prompt-stdin, le prompt lu sur l'entrée standard le remplace pour ce résumé seulement.
 Le profil écrit dans l'app (.etat/profil.md) est ajouté au contexte.
 Modèles : Claude Sonnet pour les entretiens, Claude Haiku pour les autres formats (si ANTHROPIC_API_KEY),
 puis Gemini, puis OVHcloud en secours.
@@ -14,43 +14,33 @@ import os
 import sys
 from datetime import datetime
 
-from calls_debrief.config import DOSSIER_RESUMES, GEMINI_API_KEY, MODELE_ENTRETIEN, MODELE_LEGER, MODELE_SECOURS, NOM_CANDIDAT
+from calls_debrief.config import (
+    DOSSIER_PROJET,
+    DOSSIER_RESUMES,
+    GEMINI_API_KEY,
+    MODELE_ENTRETIEN,
+    MODELE_LEGER,
+    MODELE_SECOURS,
+    NOM_CANDIDAT,
+)
 from calls_debrief.etat import FICHIER_PROFIL, FICHIER_PROMPTS
 
 TITRES = {"entretien": "Entretien", "pro": "Call pro", "perso": "Call perso", "neutre": "Neutre"}
 
-PROMPTS_DEFAUT = {
-    "entretien": """Fais le compte rendu de cet entretien (recrutement, stage ou prise de contact pour un poste), avec ces sections :
-## En bref
-La synthèse de l'entretien en 3 phrases maximum.
-## Le poste et l'entreprise
-Tout ce que l'interlocuteur a expliqué sur le poste, l'équipe, l'entreprise, le process de recrutement et les conditions, avec ses chiffres, noms et exemples.
-## Questions posées
-Chaque question posée, suivie de l'essentiel de ma réponse en une ou deux phrases.
-## Ce qui a bien marché / à améliorer
-Factuel, sans flatterie.
-## Prochaines étapes et to-do
-Ce qui a été convenu, et ce que je dois faire (relances, documents à envoyer, points à préparer).""",
-    "pro": """Fais le compte rendu de cet appel professionnel, avec ces sections :
-## Participants et contexte
-Qui parle, à quel titre, et pourquoi cet appel.
-## Points clés
-Les informations et idées importantes, dans l'ordre de l'échange.
-## Décisions
-Ce qui a été décidé ou validé.
-## Actions
-Qui fait quoi, et pour quand si c'est dit.
-## Questions ouvertes
-Ce qui reste à trancher ou à clarifier.""",
-    "perso": """Résume cet appel personnel simplement, avec ces sections :
-## Résumé
-Quelques phrases naturelles sur ce dont on a parlé.
-## À retenir
-Dates, nouvelles, recommandations, promesses faites de part et d'autre.
-## À faire
-Ce que je dois faire suite à l'appel (omets la section s'il n'y a rien).""",
-    "neutre": "Résume ce call.",
-}
+def charger_prompts_defaut() -> dict:
+    """Prompts par défaut de chaque format : prompts.json (perso, ignoré par git), sinon prompts.example.json.
+    Un format absent du fichier perso garde celui de l'exemple."""
+    with open(os.path.join(DOSSIER_PROJET, "prompts.example.json"), encoding="utf-8") as f:
+        prompts = json.load(f)
+    try:
+        with open(os.path.join(DOSSIER_PROJET, "prompts.json"), encoding="utf-8") as f:
+            perso = json.load(f)
+    except FileNotFoundError:
+        return prompts
+    prompts.update({k: v for k, v in perso.items() if k in prompts and v.strip()})
+    return prompts
+
+PROMPTS_DEFAUT = charger_prompts_defaut()
 
 CONSIGNES = """
 ---

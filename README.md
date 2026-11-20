@@ -238,7 +238,7 @@ Gemini runs in the background (`python -m calls_debrief.resume`, log in `.etat/j
 
 **Your profile**: the same window has a *Mon profil* tab: a few lines about you (background, what you're looking for, projects to highlight, known weak spots in interviews), saved to `.etat/profil.md` and added to every summary's context.
 
-**Base prompts**: menu bar → *Prompts et profil des résumés…* (or the link in the sheet) to edit each format's default prompt. Changes are saved to `.etat/prompts.json`; *Rétablir le prompt par défaut* goes back to the built-in prompt from `calls_debrief/resume.py`.
+**Base prompts**: menu bar → *Prompts et profil des résumés…* (or the link in the sheet) to edit each format's default prompt. Changes are saved to `.etat/prompts.json`; *Rétablir le prompt par défaut* goes back to the default prompt. Defaults come from `prompts.json` at the project root (your own, git-ignored), or from `prompts.example.json` if it does not exist: copy it to start (`cp prompts.example.json prompts.json`), then rerun the app installer so *Rétablir* uses the new defaults.
 
 ### Phone calls
 

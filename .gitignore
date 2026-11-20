@@ -14,3 +14,9 @@ __pycache__/
 # macOS
 .DS_Store
 .ruff_cache/
+
+# Prompts par défaut personnels (modèle : prompts.example.json)
+prompts.json
+
+# Éditeur
+.vscode/
