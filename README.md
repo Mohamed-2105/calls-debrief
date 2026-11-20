@@ -26,7 +26,17 @@ cp .env.example .env              # then fill in your keys
 .venv/bin/python installer_app.py # builds and launches ~/Applications/Calls Debrief.app
 ```
 
-On first use, allow **Calls Debrief** in *System Settings → Privacy & Security* under **Screen & System Audio Recording** and **Microphone**. Rebuilding the app may ask for these permissions again.
+On first use, allow **Calls Debrief** in *System Settings → Privacy & Security* under **Screen & System Audio Recording** and **Microphone**.
+
+To keep these permissions when the app is rebuilt, sign it with a self-signed certificate named `Calls Debrief` (created once; `installer_app.py` uses it when it exists, otherwise macOS asks again after each build):
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=Calls Debrief" \
+  -addext "extendedKeyUsage=critical,codeSigning" -keyout cle.pem -out cert.pem
+openssl pkcs12 -export -legacy -inkey cle.pem -in cert.pem -name "Calls Debrief" -out cert.p12 -passout pass:calls
+security import cert.p12 -k ~/Library/Keychains/login.keychain-db -P calls -T /usr/bin/codesign
+rm cle.pem cert.pem cert.p12
+```
 
 ### `.env`
 

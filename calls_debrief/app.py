@@ -25,6 +25,20 @@ NOM_APP = "Calls Debrief"
 EXECUTABLE = "CallsDebrief"
 IDENTIFIANT = "local.calls-debrief.app"
 APP = os.path.expanduser(f"~/Applications/{NOM_APP}.app")
+# Certificat auto-signé du trousseau de session (voir README) ; pas besoin qu'il soit marqué fiable
+CERTIFICAT_SIGNATURE = "Calls Debrief"
+
+
+def identite_signature() -> str:
+    """Empreinte SHA-1 du certificat CERTIFICAT_SIGNATURE, ou « - » (signature ad hoc) s'il est absent."""
+    sortie = subprocess.run(["security", "find-identity", "-p", "codesigning"],
+                            capture_output=True, text=True).stdout
+    for ligne in sortie.splitlines():
+        morceaux = ligne.split()
+        if len(morceaux) >= 3 and morceaux[0].endswith(")") and f'"{CERTIFICAT_SIGNATURE}"' in ligne:
+            return morceaux[1]
+    return "-"
+
 
 def creer_icone(destination: str):
     """Dessine l'icône (outils/icone) et la convertit en .icns."""
@@ -89,8 +103,14 @@ def installer():
             "CDCandidat": NOM_CANDIDAT,  # proposé en premier dans les listes de noms du panneau de validation
         }, f)
 
-    # Signature locale : nécessaire pour que macOS mémorise les autorisations (micro, audio système)
-    subprocess.run(["codesign", "--force", "--sign", "-", APP], check=True)
+    # Signature locale : nécessaire pour que macOS mémorise les autorisations (micro, audio système).
+    # Avec le certificat « Calls Debrief » du trousseau, l'app garde la même identité d'une compilation
+    # à l'autre et les autorisations survivent ; sans lui (signature ad hoc), il faut les redonner à chaque fois.
+    identite = identite_signature()
+    if identite == "-":
+        print(f"Certificat « {CERTIFICAT_SIGNATURE} » introuvable : signature ad hoc, "
+              "macOS redemandera les autorisations après chaque installation.")
+    subprocess.run(["codesign", "--force", "--sign", identite, APP], check=True)
     # Le Finder et les notifications gardent l'ancienne icône en cache sans ce signal
     subprocess.run(["touch", APP], check=False)
     subprocess.run(["open", APP], check=True)
