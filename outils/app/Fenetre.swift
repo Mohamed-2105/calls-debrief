@@ -133,8 +133,11 @@ final class Historique: ObservableObject {
 
     // MARK: Liste
 
+    /// Fichiers d'un dossier, sauf ceux dont le nom commence par « . » (temporaires). Pas `.skipsHiddenFiles` :
+    /// il écarte aussi les fichiers marqués cachés par macOS (drapeau « hidden »), qui sont de vrais appels.
     private func fichiers(_ dossier: URL) -> [URL] {
-        (try? FileManager.default.contentsOfDirectory(at: dossier, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles)) ?? []
+        let tous = (try? FileManager.default.contentsOfDirectory(at: dossier, includingPropertiesForKeys: [.creationDateKey])) ?? []
+        return tous.filter { !$0.lastPathComponent.hasPrefix(".") }
     }
 
     func recharger() {
@@ -1132,58 +1135,30 @@ struct VueTranscript: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading) {
-                    NomModifiable(nom: appel.nom, police: .title3.bold(), peutRenommer: peutModifier && !tacheEnCours,
-                                  edition: $editionNom, valider: renommer)
-                    HStack(spacing: 8) {
-                        Text(appel.date.formatted(date: .long, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-                        if appel.etat == .pret {
-                            Menu {
-                                ChoixCategorie(categorie: appel.categorie, choisir: definirCategorie)
-                            } label: {
-                                Label(appel.categorie?.titre ?? "Non classé", systemImage: appel.categorie?.icone ?? "tag")
-                                    .font(.caption)
-                            }
-                            .menuStyle(.borderlessButton).fixedSize()
-                            .help("Catégorie de l'appel")
-                        }
-                    }
-                }
-                Spacer()
-                if appel.etat == .pret {
-                    if historique.nettoyes.contains(appel.fichier) {
+            // En-tête sur deux lignes : le titre a toute la largeur ; date, catégorie et actions en dessous
+            VStack(alignment: .leading, spacing: 6) {
+                NomModifiable(nom: appel.nom, police: .title3.bold(), peutRenommer: peutModifier && !tacheEnCours,
+                              edition: $editionNom, valider: renommer)
+                HStack(spacing: 8) {
+                    Text(appel.date.formatted(date: .long, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).fixedSize()
+                    if appel.etat == .pret {
                         Menu {
-                            Button("Nettoyer à nouveau (depuis le brut)") { historique.nettoyer(appel) }
-                                .disabled(tacheEnCours)
-                            Button("Afficher le brut dans le Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([historique.urlBrut(appel)])
-                            }
+                            ChoixCategorie(categorie: appel.categorie, choisir: definirCategorie)
                         } label: {
-                            Label("Nettoyé", systemImage: "checkmark.seal.fill")
+                            Label(appel.categorie?.titre ?? "Non classé", systemImage: appel.categorie?.icone ?? "tag")
+                                .font(.caption)
                         }
-                        .fixedSize()
-                        .help("Transcript corrigé par Claude Haiku ; la version brute est gardée")
-                    } else {
-                        Button { historique.nettoyer(appel) } label: { Label("Nettoyer", systemImage: "wand.and.stars") }
-                            .disabled(tacheEnCours)
-                            .help("Corriger les erreurs de reconnaissance avec Claude Haiku (~1 centime). Le brut est gardé.")
+                        .menuStyle(.borderlessButton).fixedSize()
+                        .help("Catégorie de l'appel")
                     }
-                    Button { feuilleResume = true } label: { Label("Résumé IA", systemImage: "sparkles") }
-                        .disabled(tacheEnCours)
-                        .help(resumeEnCours ? "Résumé en cours…" : nettoyageEnCours ? "Attends la fin du nettoyage" : "Générer un résumé de cet appel")
-                    Button("Copier") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(onglet == .resume ? resume : texte, forType: .string)
+                    Spacer(minLength: 12)
+                    // Libellés complets si la place le permet, sinon icônes seules (jamais de bouton tronqué)
+                    ViewThatFits(in: .horizontal) {
+                        actions(compact: false)
+                        actions(compact: true)
                     }
-                    .disabled(onglet == .resume && resume.isEmpty)
                 }
-                Button("Afficher dans le Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([onglet == .resume && aUnResume ? historique.urlResume(appel) : appel.id])
-                }
-                Button(action: supprimer) { Image(systemName: "trash") }
-                    .disabled(!peutModifier || appel.etat == .enCours || tacheEnCours)
-                    .help("Mettre à la corbeille")
             }
             .padding()
             if let proposition, appel.etat == .pret {
@@ -1238,6 +1213,56 @@ struct VueTranscript: View {
                 historique.genererResume(appel, format: format, prompt: prompt)
                 onglet = .resume
             }
+        }
+    }
+
+    /// Boutons d'action de l'en-tête ; en mode compact, icônes seules (le libellé reste dans l'info-bulle).
+    @ViewBuilder private func actions(compact: Bool) -> some View {
+        if compact {
+            rangeeActions.labelStyle(.iconOnly).fixedSize()
+        } else {
+            rangeeActions.labelStyle(.titleAndIcon).fixedSize()
+        }
+    }
+
+    private var rangeeActions: some View {
+        HStack(spacing: 8) {
+            if appel.etat == .pret {
+                if historique.nettoyes.contains(appel.fichier) {
+                    // Badge non cliquable à la place du bouton, exactement à sa taille (bouton invisible dessous)
+                    Button {} label: { Label("Nettoyer", systemImage: "wand.and.stars") }
+                        .hidden()
+                        .overlay {
+                            Label("Nettoyé", systemImage: "checkmark.seal.fill")
+                                .foregroundStyle(.green)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(RoundedRectangle(cornerRadius: 5).fill(Color.green.opacity(0.15)))
+                                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.green.opacity(0.5)))
+                        }
+                        .help("Transcript corrigé par Claude Haiku ; la version brute est gardée (clic droit sur l'appel dans la liste pour la voir ou renettoyer)")
+                } else {
+                    Button { historique.nettoyer(appel) } label: { Label("Nettoyer", systemImage: "wand.and.stars") }
+                        .disabled(tacheEnCours)
+                        .help("Corriger les erreurs de reconnaissance avec Claude Haiku (~1 centime). Le brut est gardé.")
+                }
+                Button { feuilleResume = true } label: { Label("Résumé IA", systemImage: "sparkles") }
+                    .disabled(tacheEnCours)
+                    .help(resumeEnCours ? "Résumé en cours…" : nettoyageEnCours ? "Attends la fin du nettoyage" : "Générer un résumé de cet appel")
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(onglet == .resume ? resume : texte, forType: .string)
+                } label: { Label("Copier", systemImage: "doc.on.doc") }
+                    .disabled(onglet == .resume && resume.isEmpty)
+                    .help(onglet == .resume ? "Copier le résumé" : "Copier le transcript")
+            }
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([onglet == .resume && aUnResume ? historique.urlResume(appel) : appel.id])
+            } label: { Label("Afficher dans le Finder", systemImage: "folder") }
+                .help("Afficher dans le Finder")
+            Button(action: supprimer) { Label("Corbeille", systemImage: "trash") }
+                .labelStyle(.iconOnly)
+                .disabled(!peutModifier || appel.etat == .enCours || tacheEnCours)
+                .help("Mettre à la corbeille")
         }
     }
 
@@ -1337,7 +1362,7 @@ struct FenetrePrincipale: View {
                     .padding(.horizontal, 10).padding(.vertical, 6)
                     liste
                 }
-                .navigationSplitViewColumnWidth(min: 300, ideal: 330)
+                .navigationSplitViewColumnWidth(min: 260, ideal: 320, max: 420)
             } detail: {
                 if let appel = historique.appels.first(where: { $0.id == selection }) {
                     VueTranscript(appel: appel, historique: historique, prompts: prompts,
@@ -1349,6 +1374,7 @@ struct FenetrePrincipale: View {
                                   validerProposition: { valider(appel, noms: $0, nom: $1, categorie: $2) },
                                   ignorerProposition: { ignorerProposition(appel) },
                                   ouvrirPrompts: ouvrirPrompts)
+                    .frame(minWidth: 460)
                 } else {
                     Text("Choisis un appel à gauche").foregroundStyle(.secondary)
                 }
@@ -1421,6 +1447,11 @@ struct FenetrePrincipale: View {
                         historique.nettoyer(appel)
                     }
                     .disabled(historique.nettoyagesEnCours.contains(appel.fichier) || historique.resumesEnCours.contains(appel.fichier))
+                    if historique.nettoyes.contains(appel.fichier) {
+                        Button("Afficher le brut dans le Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([historique.urlBrut(appel)])
+                        }
+                    }
                 }
                 Button("Afficher dans le Finder") { NSWorkspace.shared.activateFileViewerSelecting([appel.id]) }
                 Divider()

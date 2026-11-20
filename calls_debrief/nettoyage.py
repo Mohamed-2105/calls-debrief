@@ -117,7 +117,7 @@ def main():
 
     if not os.path.exists(brut):
         os.makedirs(os.path.dirname(brut), exist_ok=True)
-        shutil.copy2(args.transcript, brut)
+        shutil.copyfile(args.transcript, brut)  # pas copy2 : il recopierait le drapeau macOS « caché »
     temporaire = os.path.join(os.path.dirname(brut), os.path.basename(args.transcript) + ".tmp")
     with open(temporaire, "w", encoding="utf-8") as f:
         f.write(net)
