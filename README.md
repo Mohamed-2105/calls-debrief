@@ -59,6 +59,37 @@ A 30-minute call takes about 15 minutes to transcribe on an M1.
 3. **Cleanup**: Claude Haiku fixes misrecognised words and punctuation; the raw transcript is kept in `03_Transcripts/.bruts/`.
 4. **Summary**: Claude Sonnet for interviews, Claude Haiku for other calls, with Gemini then OVHcloud as fallbacks. Default prompts come from `prompts.json` (copy `prompts.example.json` to start).
 
+## Project structure
+
+```
+calls-debrief/
+├── pipeline_calls.py            # entry point: transcribes everything in 01_A_Traiter
+├── installer_app.py             # builds and installs the menu bar app
+├── enregistrer.py               # records a call from the terminal
+├── prompts.example.json         # default summary prompts (copy to prompts.json)
+├── verifier.sh                  # ruff, imports, pytest, Swift type-check
+├── tests/                       # pytest tests (no models, no network)
+├── outils/
+│   ├── app/                     # menu bar app and main window (Swift)
+│   ├── commun/Capture.swift     # records computer sound + microphone
+│   ├── enregistreur/main.swift  # terminal recorder
+│   └── icone/main.swift         # draws the app icon
+└── calls_debrief/
+    ├── config.py                # environment variables, folders, models
+    ├── etat.py                  # local state in .etat/ (cache, proposals, prompts, profile)
+    ├── progression.py           # transcription progress shown by the app
+    ├── etapes/
+    │   ├── transcription.py     # mlx-whisper + pyannote and their merge
+    │   ├── identification.py    # proposed speaker names, call name and category
+    │   └── archivage.py         # saves transcripts to 03_Transcripts
+    ├── nettoyage.py             # transcript cleanup (Claude Haiku)
+    ├── resume.py                # AI summaries
+    ├── claude.py / gemini.py / secours.py  # Claude, Gemini and OVHcloud clients
+    ├── enregistrement.py        # mixes recorded tracks into 01_A_Traiter
+    ├── apres_enregistrement.py  # run after a recording: mix, then transcribe
+    └── app.py                   # builds ~/Applications/Calls Debrief.app
+```
+
 ## Checks
 
 ```bash
